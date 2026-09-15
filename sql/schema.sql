@@ -17,6 +17,8 @@ CREATE TABLE IF NOT EXISTS pos_card_payments (
   amount_minor      INT             NOT NULL DEFAULT 0,   -- 1250 = 12.50
   currency          VARCHAR(8)      NOT NULL DEFAULT 'usd',
   capture_method    VARCHAR(16)     NOT NULL DEFAULT 'automatic',
+  -- random per-attempt Stripe idempotency key (never derived from sale_id)
+  idem_key          VARCHAR(64)     DEFAULT NULL,
   -- pending | in_progress | succeeded | failed | canceled
   status            VARCHAR(16)     NOT NULL DEFAULT 'pending',
   reader_status     VARCHAR(16)     DEFAULT NULL,         -- in_progress|succeeded|failed
@@ -35,6 +37,9 @@ CREATE TABLE IF NOT EXISTS pos_card_payments (
   created_at        DATETIME        NOT NULL,
   updated_at        DATETIME        NOT NULL,
   PRIMARY KEY (id),
+  -- THIS is what makes a double charge impossible: the row is the claim on an
+  -- attempt, so two simultaneous "Card" clicks cannot both create a payment.
+  UNIQUE KEY uniq_sale_attempt (sale_id, attempt),
   -- The poll and the webhook both look rows up by these two.
   KEY idx_sale   (sale_id),
   KEY idx_intent (payment_intent_id),

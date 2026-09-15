@@ -70,7 +70,8 @@ result back onto the sale.
 | `sql/schema.sql` | the 3 tables this integration adds (MySQL) |
 | `tools_list_readers.php` | `php tools_list_readers.php` → your reader ids and their status |
 | `demo/pos_demo.php` | a working demo till screen — copy its JS, then delete the folder |
-| `tests/` | full end-to-end suite with a fake Stripe API (no keys, no hardware) |
+| `tests/run_tests.sh` | full end-to-end suite with a fake Stripe API (no keys, no hardware) |
+| `tests/run_sandbox_test.php` | the same flow against the REAL Stripe API in test mode, on a simulated reader |
 
 ---
 
@@ -229,7 +230,8 @@ already worded for the cashier (“Insufficient funds - ask for another card”)
 |---|---|
 | Card declined | `status: failed`, `failure_code`, cashier-ready message, `can_retry: true`. Sale left unpaid. |
 | Customer never taps | After `payment_timeout` (120s) the reader prompt is cancelled and the sale fails with `reader_timeout`. The till never hangs. |
-| Cashier double-clicks "Card" | Second click returns the **same** attempt — one intent, one prompt. Idempotency keys make a double charge impossible. |
+| Cashier double-clicks "Card" | Second click returns the **same** attempt — one intent, one prompt. The `UNIQUE (sale_id, attempt)` row *is* the claim, so even two tills racing on the same ticket cannot both create a payment. |
+| POS reuses ticket numbers (daily counters, per-till numbering) | Safe. The Stripe idempotency key is a random per-attempt nonce, never derived from the sale id or amount — see the note in section 9. |
 | Sale already paid, button pressed again | Returns the existing `paid` result. Never re-charges. |
 | Reader busy with the last customer | Previous action is cancelled and the payment is retried automatically. |
 | Browser closed mid-payment | The webhook writes the sale. Reopening the ticket shows the real state. |
@@ -257,24 +259,32 @@ sh tests/run_tests.sh
 Starts a fake Stripe API plus a PHP web server, builds a throwaway SQLite
 database, and drives every scenario over real HTTP — approved, declined, retry,
 double-click, cancel, busy reader, timeout, manual capture, webhook (signed /
-unsigned / replayed / late), refund, auth. Current run: **88 checks, 0 failures.**
+unsigned / replayed / late), refund, auth, idempotency-key regression.
+Current run: **94 checks, 0 failures.**
 
-### With a real Stripe test key, no hardware
+### Against the real Stripe API, still no hardware
 
 Register a **simulated WisePOS E** (Dashboard → Terminal → Readers → Register →
-“Simulated reader”), put its `tmr_…` in `config.php` with your `sk_test_…` key,
-then start a payment and drive the simulated card:
+“Simulated reader”, or `POST /v1/terminal/readers registration_code=simulated-wpe`),
+put its `tmr_…` in a config with your `sk_test_…` key, then:
 
-```php
-$stripe = new StripeApi();
-$stripe->testPresentPaymentMethod('tmr_simulated…', '4242424242424242'); // approves
-$stripe->testPresentPaymentMethod('tmr_simulated…', '4000000000000002'); // declines
+```sh
+POS_CONFIG_FILE=/path/to/config.sandbox.php php tests/run_sandbox_test.php
 ```
 
-### With the real reader
+Real PaymentIntents, real declines, real refunds — it presents the test cards on
+the simulated reader itself, so nothing has to be tapped and the reader on the
+counter is never disturbed. It refuses to run against a live key.
+Current run: **37 checks, 0 failures.**
 
-Use `sk_test_…` and the physical WisePOS E in test mode first — real taps, no
-real money. Then swap in the live key and the live `whsec_…`.
+### With the physical reader, test mode
+
+Point `default_reader_id` at the real `tmr_…`, keep the `sk_test_…` key, and tap
+a real card — genuine taps, no real money. The sandbox script deliberately
+*won't* drive a physical reader unattended; it tells you to point it at a
+simulated one instead.
+
+Then swap in the live key and the live `whsec_…`.
 
 ---
 
@@ -312,3 +322,30 @@ Add to Apache (or the nginx equivalent) so nothing sensitive is servable:
 - [ ] `logs/` writable, and not web-accessible
 - [ ] `demo/` and `tests/` removed
 - [ ] one real card tapped end to end, and the sale row checked in the database
+
+---
+
+## 9. One trap worth knowing about
+
+Stripe remembers an idempotency key for **24 hours** and replays the *original*
+response for it. The first version of this code keyed the PaymentIntent on
+`sale_id + attempt + amount`, which looks sensible and is quietly wrong: a POS
+that reuses ticket numbers (daily counters, per-till numbering), or any sale
+retried after the ledger row went away, gets handed back **yesterday's intent** —
+already succeeded or cancelled — and the reader then refuses it with
+`intent_invalid_state`. The till simply cannot charge that sale.
+
+I only found it by running the sandbox suite twice in a row against real Stripe.
+
+The fix, and the shape to keep:
+
+- the Stripe key is a **random per-attempt nonce**, stored in
+  `pos_card_payments.idem_key`, never derived from sale data;
+- protection against a double charge comes from the database instead —
+  `UNIQUE (sale_id, attempt)`, where inserting the row *is* claiming the attempt;
+- refunds are keyed on the **charge id**, which is globally unique, for the same
+  reason;
+- and if an intent ever does come back unusable, the code mints a fresh one and
+  prompts the reader with that rather than failing the sale.
+
+`tests/run_flow_test.php` case 19 is the regression guard.

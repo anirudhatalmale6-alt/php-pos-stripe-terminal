@@ -409,6 +409,39 @@ check('reader id + online status shown',
       isset($readers['json']['readers'][0]['id']) && $readers['json']['readers'][0]['status'] === 'online');
 
 // -----------------------------------------------------------------------------
+echo "\n[19] Regression: the Stripe idempotency key must not be derivable from the sale\n";
+// -----------------------------------------------------------------------------
+// Real bug, found by running the sandbox suite twice: the key used to be
+// 'pos-sale-{id}-a{attempt}-{amount}'. Stripe remembers a key for 24h and
+// replays the ORIGINAL response, so a reused ticket number - or a rerun against
+// a restored ledger - got handed back yesterday's finished intent and the reader
+// refused it with intent_invalid_state. The key is now a random per-attempt
+// nonce; double-charge safety comes from UNIQUE (sale_id, attempt) instead.
+http_call('POST', $MOCK . '/__mock/reset', array());
+mock_config(array('outcome' => 'approve', 'polls' => 1));
+reset_sale(1010, 11.00);
+
+$first = api('terminal_charge.php', array('sale_id' => '1010', 'amount' => '11.00'));
+$keyA  = payment_row(1010)['idem_key'];
+check('an idempotency key is stored on the attempt', !empty($keyA), var_export($keyA, true));
+check('the key does not contain the sale id', strpos((string) $keyA, '1010') === false, (string) $keyA);
+check('the key does not contain the amount', strpos((string) $keyA, '1100') === false, (string) $keyA);
+
+// Simulate a restored / reset ledger: same sale, same amount, row ids restart.
+db()->prepare('DELETE FROM pos_card_payments WHERE sale_id = ?')->execute(array('1010'));
+$second = api('terminal_charge.php', array('sale_id' => '1010', 'amount' => '11.00'));
+$keyB   = payment_row(1010)['idem_key'];
+check('a fresh attempt mints a different key', $keyA !== $keyB, $keyA . ' vs ' . $keyB);
+check('and it gets its own PaymentIntent',
+      !empty($second['json']['payment_intent_id'])
+      && $second['json']['payment_intent_id'] !== $first['json']['payment_intent_id'],
+      json_encode(array($first['json']['payment_intent_id'], $second['json']['payment_intent_id'])));
+
+// Two attempts on the same sale must also differ from each other.
+$final = poll_until_final(1010);
+check('second attempt still pays normally', $final['json']['status'] === 'paid', json_encode($final['json']));
+
+// -----------------------------------------------------------------------------
 echo "\n=== RESULT: $pass passed, $fail failed ===\n";
 if ($fail > 0) {
     echo "\nFailures:\n";

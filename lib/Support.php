@@ -205,24 +205,59 @@ function pos_ip_allowed($ip, array $allowed)
  */
 function pos_decline_message($code, $fallback = '')
 {
+    // Keys are Stripe decline_code / error code values. Deliberately worded as
+    // an instruction to the cashier, because that is who reads them.
     $map = array(
-        'card_declined'            => 'Card declined - ask for another card',
-        'insufficient_funds'       => 'Insufficient funds - ask for another card',
-        'incorrect_pin'            => 'Wrong PIN - ask the customer to retry',
-        'pin_try_exceeded'         => 'Too many PIN attempts - card blocked, use another card',
-        'expired_card'             => 'Card expired - ask for another card',
-        'lost_card'                => 'Card declined - ask for another card',
-        'stolen_card'              => 'Card declined - ask for another card',
-        'pickup_card'              => 'Card declined - ask for another card',
-        'processing_error'         => 'Processing error - please retry the tap',
-        'try_again_later'          => 'Issuer busy - please retry the tap',
-        'canceled'                 => 'Payment cancelled',
-        'reader_timeout'           => 'Reader timed out - please retry the tap',
-        'failed_to_process'        => 'Reader could not read the card - retry or try chip/swipe',
-        'terminal_reader_timeout'  => 'Reader did not respond - check it is on WiFi and awake',
-        'terminal_reader_offline'  => 'Reader is offline - check its WiFi connection',
-        'terminal_reader_busy'     => 'Reader is busy with another payment',
-        'intent_invalid_state'     => 'This sale is no longer in a payable state',
+        // --- the issuer said no -------------------------------------------
+        'card_declined'                 => 'Card declined - ask for another card',
+        'generic_decline'               => 'Card declined - ask for another card',
+        'do_not_honor'                  => 'Card declined by the bank - ask for another card',
+        'transaction_not_allowed'       => 'This card will not allow the payment - ask for another card',
+        'service_not_allowed'           => 'This card will not allow the payment - ask for another card',
+        'not_permitted'                 => 'This card will not allow the payment - ask for another card',
+        'card_not_supported'            => 'This card type is not supported - ask for another card',
+        'currency_not_supported'        => 'Card cannot pay in this currency - ask for another card',
+        'restricted_card'               => 'Card is restricted - ask for another card',
+        'security_violation'            => 'Card declined - ask for another card',
+        'stop_payment_order'            => 'Card declined - ask for another card',
+        'merchant_blacklist'            => 'Card declined - ask for another card',
+        'invalid_account'               => 'Card declined - ask for another card',
+        'fraudulent'                    => 'Card declined - ask for another card',
+        'insufficient_funds'            => 'Insufficient funds - ask for another card',
+        'withdrawal_count_limit_exceeded' => 'Card limit reached - ask for another card',
+        'expired_card'                  => 'Card expired - ask for another card',
+        'lost_card'                     => 'Card declined - ask for another card',
+        'stolen_card'                   => 'Card declined - ask for another card',
+        'pickup_card'                   => 'Card declined - ask for another card',
+        'testmode_decline'              => 'Test card declined (test mode)',
+
+        // --- PIN -----------------------------------------------------------
+        'incorrect_pin'                 => 'Wrong PIN - ask the customer to retry',
+        'invalid_pin'                   => 'Wrong PIN - ask the customer to retry',
+        'pin_try_exceeded'              => 'Too many PIN attempts - card blocked, use another card',
+        'pin_required'                  => 'PIN required - ask the customer to insert the card',
+        'offline_pin_required'          => 'PIN required - ask the customer to insert the card',
+        'online_or_offline_pin_required'=> 'PIN required - ask the customer to insert the card',
+
+        // --- retryable ------------------------------------------------------
+        'processing_error'              => 'Processing error - please retry the tap',
+        'try_again_later'               => 'Issuer busy - please retry the tap',
+        'issuer_not_available'          => 'Bank not reachable - please retry the tap',
+        'reenter_transaction'           => 'Please retry the tap',
+        'approve_with_id'               => 'Bank needs the payment retried - please tap again',
+        'authentication_required'       => 'Card needs authentication - ask the customer to insert and enter PIN',
+
+        // --- our side / the reader -----------------------------------------
+        'canceled'                      => 'Payment cancelled',
+        'reader_timeout'                => 'Reader timed out - please retry the tap',
+        'failed_to_process'             => 'Reader could not read the card - retry or try chip/swipe',
+        'terminal_reader_timeout'       => 'Reader did not respond - check it is on WiFi and awake',
+        'terminal_reader_offline'       => 'Reader is offline - check its WiFi connection',
+        'terminal_reader_busy'          => 'Reader is busy with another payment',
+        'terminal_reader_hardware_fault'=> 'Reader hardware fault - restart the reader',
+        'intent_invalid_state'          => 'This sale is no longer in a payable state',
+        'setup_failed'                  => 'The payment could not be started - please press Card again',
+        'capture_failed'                => 'Card was authorised but the capture failed - check Stripe before retrying',
     );
     if ($code !== null && $code !== '' && isset($map[$code])) {
         return $map[$code];

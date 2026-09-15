@@ -9,6 +9,7 @@ CREATE TABLE IF NOT EXISTS pos_card_payments (
   amount_minor      INTEGER NOT NULL DEFAULT 0,
   currency          TEXT NOT NULL DEFAULT 'usd',
   capture_method    TEXT NOT NULL DEFAULT 'automatic',
+  idem_key          TEXT,
   status            TEXT NOT NULL DEFAULT 'pending',
   reader_status     TEXT,
   attempt           INTEGER NOT NULL DEFAULT 1,
@@ -26,6 +27,9 @@ CREATE TABLE IF NOT EXISTS pos_card_payments (
   created_at        TEXT NOT NULL,
   updated_at        TEXT NOT NULL
 );
+-- Mirrors UNIQUE KEY uniq_sale_attempt in sql/schema.sql - the claim that
+-- makes two simultaneous "Card" clicks collapse into one payment.
+CREATE UNIQUE INDEX IF NOT EXISTS uniq_sale_attempt ON pos_card_payments (sale_id, attempt);
 CREATE INDEX IF NOT EXISTS idx_sale   ON pos_card_payments (sale_id);
 CREATE INDEX IF NOT EXISTS idx_intent ON pos_card_payments (payment_intent_id);
 

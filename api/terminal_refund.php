@@ -38,9 +38,10 @@ try {
     $refund = $stripe->refundCharge(
         $row['charge_id'],
         $amountMinor,
-        // Same sale + same amount = same refund, so a double click cannot
-        // refund twice.
-        'pos-refund-' . $saleId . '-' . ($amountMinor === null ? 'full' : $amountMinor)
+        // Keyed on the CHARGE, not the sale: charge ids are globally unique, so
+        // a POS that reuses ticket numbers can never have one sale's refund
+        // replayed against another's charge. (Stripe remembers a key for 24h.)
+        'pos-refund-' . $row['charge_id'] . '-' . ($amountMinor === null ? 'full' : $amountMinor)
     );
 
     $refunded = (int) $refund['amount'];

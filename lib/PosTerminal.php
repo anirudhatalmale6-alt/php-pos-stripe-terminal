@@ -164,80 +164,95 @@ function pos_start_card_payment($saleId, array $opts = array())
     $amountMinor = pos_resolve_amount($saleId, isset($opts['amount']) ? $opts['amount'] : null, $currency);
     $capture     = pos_config('capture_method', 'automatic');
 
-    // --- Reuse or create the PaymentIntent ---------------------------------
-    $intent = null;
-    if ($existing && !empty($existing['payment_intent_id']) && in_array($existing['status'], array('pending','in_progress','failed'), true)) {
+    // --- Claim this attempt in our own table FIRST -------------------------
+    // The row is the claim: pos_card_payments has UNIQUE (sale_id, attempt),
+    // so if two tills (or two clicks) race, exactly one INSERT wins and the
+    // loser is handed the winner's attempt instead of starting a second one.
+    // Claiming before calling Stripe also means a crash between here and the
+    // reader still leaves a record the status endpoint can settle.
+    $attempt = $existing ? ((int) $existing['attempt'] + 1) : 1;
+
+    // The idempotency key for this attempt, minted once and stored on the row.
+    // It must be unique for all time, NOT derivable from the sale - see the
+    // note at the createPaymentIntent call below.
+    $idemKey = 'pos-pi-' . bin2hex(random_bytes(12));
+
+    $paymentId = pos_payment_claim_attempt(array(
+        'sale_id'        => $saleId,
+        'attempt'        => $attempt,
+        'reader_id'      => $readerId,
+        'amount_minor'   => $amountMinor,
+        'currency'       => $currency,
+        'status'         => 'pending',
+        'capture_method' => $capture,
+        'idem_key'       => $idemKey,
+        'till'           => isset($opts['till']) ? (string) $opts['till'] : null,
+        'started_at'     => pos_now(),
+    ));
+
+    if ($paymentId === null) {
+        // Someone else claimed this exact attempt a moment ago. Wait briefly
+        // for them to attach their intent, then report THEIR attempt.
+        for ($i = 0; $i < 10; $i++) {
+            $winner = pos_payment_find_attempt($saleId, $attempt);
+            if ($winner && !empty($winner['payment_intent_id'])) {
+                pos_log('info', 'Duplicate start collapsed onto the live attempt',
+                    array('sale_id' => $saleId, 'attempt' => $attempt));
+                return pos_public_status($winner, 'Present card on the reader');
+            }
+            usleep(200000);
+        }
+        return array(
+            'ok' => true, 'status' => 'in_progress', 'sale_id' => $saleId,
+            'message' => 'Sending sale to the reader', 'poll_interval_ms' => 1500,
+        );
+    }
+
+    // --- Retire the previous attempt's intent ------------------------------
+    // A new attempt means the old prompt must not be completable any more,
+    // or a zombie tap on the previous intent could charge the customer twice.
+    if ($existing && !empty($existing['payment_intent_id']) && $existing['status'] !== 'succeeded') {
         try {
-            $candidate = $stripe->retrievePaymentIntent($existing['payment_intent_id']);
-            // After a decline Stripe puts the intent back to
-            // requires_payment_method, which means it can simply be re-presented.
-            $reusable = in_array($candidate['status'], array('requires_payment_method', 'requires_confirmation'), true)
-                && (int) $candidate['amount'] === $amountMinor;
-            if ($reusable) {
-                $intent = $candidate;
-                pos_log('info', 'Reusing PaymentIntent after retry', array('sale_id' => $saleId, 'pi' => $intent['id']));
+            $old = $stripe->retrievePaymentIntent($existing['payment_intent_id'], false);
+            if (in_array($old['status'], array('requires_payment_method', 'requires_confirmation', 'requires_capture'), true)) {
+                $stripe->cancelPaymentIntent($old['id'], 'abandoned');
+                pos_log('info', 'Cancelled the previous attempt', array('pi' => $old['id']));
             }
         } catch (StripeApiException $e) {
-            pos_log('error', 'Could not reload previous intent: ' . $e->getMessage());
+            pos_log('info', 'Could not retire the previous intent: ' . $e->getMessage());
         }
     }
 
-    if ($intent === null) {
-        // attempt number keeps the idempotency key unique per retry, while
-        // still collapsing accidental duplicate clicks of the same attempt.
-        $attempt = $existing ? ((int) $existing['attempt'] + 1) : 1;
-        $intent = $stripe->createPaymentIntent(
-            $amountMinor,
-            $currency,
-            array(
-                'sale_id' => $saleId,
-                'source'  => 'pos',
-                'till'    => isset($opts['till']) ? (string) $opts['till'] : '',
-            ),
-            array(
-                'capture_method'  => $capture,
-                'description'     => isset($opts['description']) && $opts['description'] !== ''
-                    ? $opts['description']
-                    : ('POS sale #' . $saleId),
-                'customer'        => isset($opts['customer']) ? $opts['customer'] : null,
-                'receipt_email'   => isset($opts['receipt_email']) ? $opts['receipt_email'] : null,
-                'idempotency_key' => 'pos-sale-' . $saleId . '-a' . $attempt . '-' . $amountMinor,
-            )
-        );
-    } else {
-        $attempt = (int) $existing['attempt'] + 1;
-    }
+    // --- Create the PaymentIntent ------------------------------------------
+    // The idempotency key is the random nonce minted above and stored on the
+    // ledger row. Do NOT make it derivable from the sale (sale_id + amount, or
+    // even the row id): Stripe remembers a key for 24h and replays the ORIGINAL
+    // response, so a POS that reuses ticket numbers - or any run against a
+    // restored/reset ledger - gets handed back yesterday's intent, already
+    // succeeded or cancelled, and the reader refuses it with
+    // intent_invalid_state. Found by running this twice against the real Stripe
+    // sandbox. Safety against a double click comes from the UNIQUE
+    // (sale_id, attempt) claim above, not from the key.
+    $intent = $stripe->createPaymentIntent(
+        $amountMinor,
+        $currency,
+        array(
+            'sale_id' => $saleId,
+            'source'  => 'pos',
+            'till'    => isset($opts['till']) ? (string) $opts['till'] : '',
+        ),
+        array(
+            'capture_method'  => $capture,
+            'description'     => isset($opts['description']) && $opts['description'] !== ''
+                ? $opts['description']
+                : ('POS sale #' . $saleId),
+            'customer'        => isset($opts['customer']) ? $opts['customer'] : null,
+            'receipt_email'   => isset($opts['receipt_email']) ? $opts['receipt_email'] : null,
+            'idempotency_key' => $idemKey,
+        )
+    );
 
-    // --- Persist our own row BEFORE touching the reader --------------------
-    // If the next call dies mid-flight we still know an intent exists for this
-    // sale, so the status endpoint / webhook can pick the outcome up later.
-    if ($existing && $existing['status'] !== 'succeeded') {
-        $paymentId = (int) $existing['id'];
-        pos_payment_update($paymentId, array(
-            'payment_intent_id' => $intent['id'],
-            'reader_id'         => $readerId,
-            'amount_minor'      => $amountMinor,
-            'currency'          => $currency,
-            'status'            => 'pending',
-            'attempt'           => $attempt,
-            'failure_code'      => null,
-            'failure_message'   => null,
-            'started_at'        => pos_now(),
-        ));
-    } else {
-        $paymentId = pos_payment_insert(array(
-            'sale_id'           => $saleId,
-            'payment_intent_id' => $intent['id'],
-            'reader_id'         => $readerId,
-            'amount_minor'      => $amountMinor,
-            'currency'          => $currency,
-            'status'            => 'pending',
-            'attempt'           => 1,
-            'capture_method'    => $capture,
-            'till'              => isset($opts['till']) ? (string) $opts['till'] : null,
-            'started_at'        => pos_now(),
-        ));
-    }
+    pos_payment_update($paymentId, array('payment_intent_id' => $intent['id']));
     pos_payment_event($paymentId, 'pos', 'intent_created', array('pi' => $intent['id'], 'amount' => $amountMinor));
 
     // Mark the sale as awaiting the card, so any other screen looking at the
@@ -291,6 +306,30 @@ function pos_start_card_payment($saleId, array $opts = array())
             } catch (StripeApiException $e2) {
                 return pos_fail_payment($paymentId, $saleId, $e2->stripeCode ? $e2->stripeCode : 'reader_error', $e2->getMessage());
             }
+        } elseif (in_array($e->stripeCode, array('intent_invalid_state', 'payment_intent_unexpected_state'), true)) {
+            // The intent we were given cannot be collected (already finished or
+            // cancelled - e.g. Stripe replayed an old idempotent request). Build
+            // a genuinely new one and prompt with that instead of failing the
+            // sale: an unusable intent is our problem, not the customer's.
+            pos_log('error', 'Intent unusable, creating a fresh one', array('pi' => $intent['id'], 'code' => $e->stripeCode));
+            try {
+                $fresh = $stripe->createPaymentIntent($amountMinor, $currency,
+                    array('sale_id' => $saleId, 'source' => 'pos-recovery'),
+                    array(
+                        'capture_method' => $capture,
+                        'description'    => 'POS sale #' . $saleId,
+                        // A recovery must NOT reuse the key that produced the
+                        // unusable intent, so it carries its own suffix.
+                        'idempotency_key' => $idemKey . '-r' . bin2hex(random_bytes(4)),
+                    )
+                );
+                pos_payment_update($paymentId, array('payment_intent_id' => $fresh['id']));
+                pos_payment_event($paymentId, 'pos', 'intent_recreated', array('old' => $intent['id'], 'new' => $fresh['id']));
+                $intent = $fresh;
+                $reader = $stripe->processPaymentIntentOnReader($readerId, $intent['id'], $processConfig);
+            } catch (StripeApiException $e3) {
+                return pos_fail_payment($paymentId, $saleId, $e3->stripeCode ? $e3->stripeCode : 'reader_error', $e3->getMessage());
+            }
         } else {
             return pos_fail_payment($paymentId, $saleId, $e->stripeCode ? $e->stripeCode : 'reader_error', $e->getMessage());
         }
@@ -341,6 +380,19 @@ function pos_check_card_payment($saleId)
     // Already settled - answer from our own row, no Stripe call needed.
     if (in_array($row['status'], array('succeeded', 'failed', 'canceled'), true)) {
         return pos_public_status($row);
+    }
+
+    // The attempt was claimed but no intent ever got attached (the charge call
+    // died between the two). Nothing was sent to the reader, so nothing can be
+    // collected: give the till a clear failure it can retry instead of leaving
+    // it polling a row that will never move.
+    if (empty($row['payment_intent_id'])) {
+        $claimed = strtotime($row['started_at'] ? $row['started_at'] : $row['created_at']);
+        if ($claimed && (time() - $claimed) > 20) {
+            return pos_fail_payment($row['id'], $row['sale_id'], 'setup_failed',
+                'The payment could not be started - please press Card again.');
+        }
+        return pos_public_status($row, 'Sending sale to the reader');
     }
 
     $stripe = new StripeApi();
@@ -521,7 +573,8 @@ function pos_finalize_from_intent(array $row, array $intent, $source = 'poll')
                 $intent = $stripe->capturePaymentIntent(
                     $intent['id'],
                     null,
-                    'pos-capture-' . $row['sale_id'] . '-' . $row['attempt']
+                    // Keyed on the intent, which is globally unique.
+                    'pos-capture-' . $intent['id']
                 );
                 $status = isset($intent['status']) ? $intent['status'] : $status;
                 pos_payment_event($row['id'], $source, 'captured');

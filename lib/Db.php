@@ -69,6 +69,43 @@ function pos_payment_find_by_reader_pending($readerId)
     return $row ? $row : null;
 }
 
+/**
+ * One specific attempt of one sale.
+ */
+function pos_payment_find_attempt($saleId, $attempt)
+{
+    $st = pos_db()->prepare('SELECT * FROM pos_card_payments WHERE sale_id = ? AND attempt = ? LIMIT 1');
+    $st->execute(array((string) $saleId, (int) $attempt));
+    $row = $st->fetch();
+    return $row ? $row : null;
+}
+
+/**
+ * Try to claim (sale_id, attempt) by inserting the ledger row.
+ *
+ * The UNIQUE key on those two columns is what makes this a claim: if two tills
+ * or two clicks race, one INSERT succeeds and the other hits the constraint and
+ * gets null back - so only one PaymentIntent is ever created for an attempt.
+ *
+ * @return int|null row id, or null if someone else already claimed it
+ */
+function pos_payment_claim_attempt(array $data)
+{
+    try {
+        return pos_payment_insert($data);
+    } catch (PDOException $e) {
+        // 23000 = integrity constraint violation (MySQL and SQLite both).
+        if ($e->getCode() === '23000' || stripos($e->getMessage(), 'unique') !== false) {
+            pos_log('info', 'Attempt already claimed', array(
+                'sale_id' => isset($data['sale_id']) ? $data['sale_id'] : '',
+                'attempt' => isset($data['attempt']) ? $data['attempt'] : '',
+            ));
+            return null;
+        }
+        throw $e;
+    }
+}
+
 function pos_payment_insert(array $data)
 {
     $data['created_at'] = pos_now();
