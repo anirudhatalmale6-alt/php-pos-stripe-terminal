@@ -1,0 +1,5 @@
+# Never commit real keys or logs.
+config.php
+logs/
+*.log
+*.sqlite
