@@ -230,6 +230,10 @@ function pos_decline_message($code, $fallback = '')
         'stolen_card'                   => 'Card declined - ask for another card',
         'pickup_card'                   => 'Card declined - ask for another card',
         'testmode_decline'              => 'Test card declined (test mode)',
+        // Only possible with a test key: a real card was tapped on a reader
+        // that is in test mode. Stripe's own wording here points the CASHIER at
+        // a developer docs URL, so it gets replaced.
+        'test_mode_live_card'           => 'Test mode - this reader only accepts a Stripe test card',
 
         // --- PIN -----------------------------------------------------------
         'incorrect_pin'                 => 'Wrong PIN - ask the customer to retry',
