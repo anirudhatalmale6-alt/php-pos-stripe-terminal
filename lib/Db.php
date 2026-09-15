@@ -70,6 +70,59 @@ function pos_payment_find_by_reader_pending($readerId)
 }
 
 /**
+ * Column names + types of a table, portable across MySQL and SQLite, cached
+ * per request.
+ *
+ * Returns null if the schema could not be read (e.g. the DB user has no rights
+ * to introspect). Callers must treat null as "cannot verify", never as "empty".
+ */
+function pos_table_columns($table)
+{
+    static $cache = array();
+    if (array_key_exists($table, $cache)) {
+        return $cache[$table];
+    }
+
+    try {
+        $pdo    = pos_db();
+        $driver = $pdo->getAttribute(PDO::ATTR_DRIVER_NAME);
+        $cols   = array();
+
+        if ($driver === 'sqlite') {
+            foreach ($pdo->query('PRAGMA table_info(' . $table . ')') as $r) {
+                $cols[$r['name']] = array('type' => $r['type'], 'null' => !$r['notnull'], 'pk' => (bool) $r['pk']);
+            }
+        } else {
+            foreach ($pdo->query('SHOW COLUMNS FROM `' . str_replace('`', '', $table) . '`') as $r) {
+                $cols[$r['Field']] = array(
+                    'type' => $r['Type'],
+                    'null' => (strtoupper($r['Null']) === 'YES'),
+                    'pk'   => (strtoupper($r['Key']) === 'PRI'),
+                );
+            }
+        }
+        $cache[$table] = empty($cols) ? null : $cols;
+    } catch (Exception $e) {
+        pos_log('info', 'Could not read the columns of ' . $table . ': ' . $e->getMessage());
+        $cache[$table] = null;
+    }
+    return $cache[$table];
+}
+
+/**
+ * Is this column really there? Unknown schema => true, so a database we cannot
+ * introspect behaves exactly as it did before.
+ */
+function pos_column_exists($table, $column)
+{
+    $cols = pos_table_columns($table);
+    if ($cols === null) {
+        return true;
+    }
+    return isset($cols[$column]);
+}
+
+/**
  * One specific attempt of one sale.
  */
 function pos_payment_find_attempt($saleId, $attempt)

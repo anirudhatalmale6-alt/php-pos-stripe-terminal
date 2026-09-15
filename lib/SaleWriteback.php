@@ -35,8 +35,34 @@ function pos_writeback_sale($saleId, array $result)
     $set    = array();
     $params = array();
 
+    /**
+     * Only ever put a column in the UPDATE if it really exists.
+     *
+     * Without this, one typo in the mapping means the UPDATE throws AFTER the
+     * card has been charged - the worst possible moment. A missing column now
+     * costs you that one field and a loud log line; the payment still completes
+     * and everything else is still written.
+     *
+     * If the schema cannot be read at all, this returns true and behaves as
+     * before.
+     */
+    $usable = function ($column) use ($map) {
+        if (empty($column)) {
+            return false;
+        }
+        if (pos_column_exists($map['table'], $column)) {
+            return true;
+        }
+        pos_log('error', 'sale_writeback maps a column that does not exist - skipping it', array(
+            'table'  => $map['table'],
+            'column' => $column,
+            'fix'    => 'run php tools_check_sales_table.php',
+        ));
+        return false;
+    };
+
     // --- payment status -------------------------------------------------
-    if (!empty($map['status_column'])) {
+    if ($usable(isset($map['status_column']) ? $map['status_column'] : null)) {
         $key = 'status_' . ($status === 'paid' ? 'paid' : ($status === 'failed' ? 'failed' : 'pending'));
         if (!empty($map[$key])) {
             $set[] = $map['status_column'] . ' = ?';
@@ -46,27 +72,27 @@ function pos_writeback_sale($saleId, array $result)
 
     // --- amount, charge id, card details: only on success ---------------
     if ($status === 'paid') {
-        if (!empty($map['amount_column'])) {
+        if ($usable(isset($map['amount_column']) ? $map['amount_column'] : null)) {
             $set[] = $map['amount_column'] . ' = ?';
             $params[] = pos_from_minor_units($result['amount_minor'], $result['currency']);
         }
-        if (!empty($map['charge_id_column']) && !empty($result['charge_id'])) {
+        if (!empty($result['charge_id']) && $usable(isset($map['charge_id_column']) ? $map['charge_id_column'] : null)) {
             $set[] = $map['charge_id_column'] . ' = ?';
             $params[] = $result['charge_id'];
         }
-        if (!empty($map['last4_column']) && !empty($result['last4'])) {
+        if (!empty($result['last4']) && $usable(isset($map['last4_column']) ? $map['last4_column'] : null)) {
             $set[] = $map['last4_column'] . ' = ?';
             $params[] = $result['last4'];
         }
-        if (!empty($map['brand_column']) && !empty($result['brand'])) {
+        if (!empty($result['brand']) && $usable(isset($map['brand_column']) ? $map['brand_column'] : null)) {
             $set[] = $map['brand_column'] . ' = ?';
             $params[] = $result['brand'];
         }
-        if (!empty($map['method_column']) && !empty($map['method_value'])) {
+        if (!empty($map['method_value']) && $usable(isset($map['method_column']) ? $map['method_column'] : null)) {
             $set[] = $map['method_column'] . ' = ?';
             $params[] = $map['method_value'];
         }
-        if (!empty($map['paid_at_column'])) {
+        if ($usable(isset($map['paid_at_column']) ? $map['paid_at_column'] : null)) {
             $set[] = $map['paid_at_column'] . ' = ?';
             $params[] = pos_now();
         }
@@ -74,7 +100,7 @@ function pos_writeback_sale($saleId, array $result)
 
     // The intent id is useful on every outcome - it is how you find the
     // attempt in the Stripe dashboard, declines included.
-    if (!empty($map['intent_id_column']) && !empty($result['payment_intent_id'])) {
+    if (!empty($result['payment_intent_id']) && $usable(isset($map['intent_id_column']) ? $map['intent_id_column'] : null)) {
         $set[] = $map['intent_id_column'] . ' = ?';
         $params[] = $result['payment_intent_id'];
     }

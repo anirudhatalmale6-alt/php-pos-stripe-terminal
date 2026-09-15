@@ -69,6 +69,7 @@ result back onto the sale.
 | `lib/Db.php`, `lib/Support.php` | PDO + ledger helpers, config, logging, auth, money |
 | `sql/schema.sql` | the 3 tables this integration adds (MySQL) |
 | `tools_list_readers.php` | `php tools_list_readers.php` → your reader ids and their status |
+| `tools_check_sales_table.php` | `php tools_check_sales_table.php` → reads your sales table and **writes the mapping for you** |
 | `demo/pos_demo.php` | a working demo till screen — copy its JS, then delete the folder |
 | `tests/run_tests.sh` | full end-to-end suite with a fake Stripe API (no keys, no hardware) |
 | `tests/run_sandbox_test.php` | the same flow against the REAL Stripe API in test mode, on a simulated reader |
@@ -101,9 +102,26 @@ mkdir -p logs && chmod 775 logs
 Keep `config.php` and `logs/` outside anything web-served if you can; the
 included `.gitignore` and the deny rules below cover the common case.
 
-### 3.3 Column mapping
+### 3.3 Column mapping — let the tool do it
 
-`config.php → sale_writeback` is where you point the result at your own table.
+Fill in `db{}` and the table name, then run:
+
+```sh
+php tools_check_sales_table.php
+```
+
+It reads your sales table, lists the columns, checks every column you have
+mapped actually exists, and prints a ready-to-paste `sale_lookup` /
+`sale_writeback` block built from your real column names. It writes nothing —
+it only reads the table definition. Fix anything it flags `WRONG`, re-run until
+it says `ALL GREEN`, and the write-back is wired.
+
+It also copes with schemas that look nothing like the sample: given
+`saleid / grand_total / pay_status / paid_amount / txn_id / cc_last4 / cardtype`
+it suggests exactly those, and leaves a field `null` rather than guessing when
+there is no sensible match.
+
+`config.php → sale_writeback` is what that block fills in.
 Set a column name to `null` and it is skipped, so you only fill in what you have:
 
 ```php
@@ -237,6 +255,7 @@ already worded for the cashier (“Insufficient funds - ask for another card”)
 | Browser closed mid-payment | The webhook writes the sale. Reopening the ticket shows the real state. |
 | Network blip during the poll | Reported as still `in_progress`, never as a decline. |
 | Stripe says approved but the DB write fails | Logged as `PAID BUT WRITE-BACK FAILED` with the charge id, still reported as paid, and the webhook retries the write. Money is never silently lost. |
+| A column name in the mapping is wrong | That one field is skipped and logged loudly (pointing at `tools_check_sales_table.php`); the payment still completes and every other field is still written. A typo in config costs you a field, never a sale. The card details stay on the ledger row regardless, so a receipt reprint still works. |
 | Reader "failed" but the intent succeeded | The PaymentIntent wins — if the money moved, the sale is marked paid. |
 | Late failure event for a paid sale | Ignored. A paid sale is never downgraded. |
 | POS sends a different amount than the DB | Refused before anything reaches the reader. |
@@ -259,8 +278,9 @@ sh tests/run_tests.sh
 Starts a fake Stripe API plus a PHP web server, builds a throwaway SQLite
 database, and drives every scenario over real HTTP — approved, declined, retry,
 double-click, cancel, busy reader, timeout, manual capture, webhook (signed /
-unsigned / replayed / late), refund, auth, idempotency-key regression.
-Current run: **94 checks, 0 failures.**
+unsigned / replayed / late), refund, auth, idempotency-key regression, and a
+deliberately broken column mapping.
+Current run: **105 checks, 0 failures.**
 
 ### Against the real Stripe API, still no hardware
 

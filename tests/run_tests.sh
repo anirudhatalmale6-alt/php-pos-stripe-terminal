@@ -23,6 +23,7 @@ MOCK_STATE="$WORK/mock_state.json"
 CONF="$WORK/config.test.php"
 CONF_MANUAL="$WORK/config.manual.php"
 CONF_TIMEOUT="$WORK/config.timeout.php"
+CONF_BADMAP="$WORK/config.badmap.php"
 SECRET="whsec_testsecret"
 TOKEN="test-token-abc123"
 
@@ -82,6 +83,11 @@ PHPCONF
 write_config "$CONF" automatic 120
 write_config "$CONF_MANUAL" manual 120
 write_config "$CONF_TIMEOUT" automatic 1
+# Same as the main config but with two deliberately wrong column names, to
+# prove a mapping typo cannot cost a payment.
+sed -e "s/'last4_column' => 'card_last4'/'last4_column' => 'column_that_does_not_exist'/" \
+    -e "s/'brand_column' => 'card_brand'/'brand_column' => 'another_missing_column'/" \
+    "$CONF" > "$CONF_BADMAP"
 
 # --- servers ------------------------------------------------------------------
 # Logged to files and stopped by PID, never by process pattern.
@@ -123,6 +129,10 @@ POS_CONFIG_FILE="$CONF_MANUAL" \
 MOCK_BASE="http://127.0.0.1:$MOCK_PORT" \
 POS_CONFIG_FILE="$CONF_TIMEOUT" \
   php "$ROOT/tests/run_timeout_test.php" || RC=$?
+
+MOCK_BASE="http://127.0.0.1:$MOCK_PORT" \
+POS_CONFIG_FILE="$CONF_BADMAP" \
+  php "$ROOT/tests/run_bad_mapping_test.php" || RC=$?
 
 echo ""
 echo "server logs: $WORK/app.log  $WORK/mock.log"
