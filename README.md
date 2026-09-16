@@ -70,9 +70,13 @@ result back onto the sale.
 | `sql/schema.sql` | the 3 tables this integration adds (MySQL) |
 | `tools_list_readers.php` | `php tools_list_readers.php` → your reader ids and their status |
 | `tools_check_sales_table.php` | `php tools_check_sales_table.php` → reads your sales table and **writes the mapping for you** |
-| `demo/pos_demo.php` | a working demo till screen — copy its JS, then delete the folder |
+| `pay/pay_window.php` | **the card payment window.** Open it from your Card button; it does the whole payment and shows the status |
+| `pay/pos_pay.js` | `PosPay.open({...})` — opens the window and hands your POS the result |
+| `demo/till_button.php` | a stand-in till screen showing the Card button wired up |
+| `demo/pos_demo.php` | an inline (no popup) version of the same flow |
 | `tests/run_tests.sh` | full end-to-end suite with a fake Stripe API (no keys, no hardware) |
 | `tests/run_sandbox_test.php` | the same flow against the REAL Stripe API in test mode, on a simulated reader |
+| `tests/run_window_ui_test.py` | drives the payment window in a real browser (needs Playwright) |
 
 ---
 
@@ -168,6 +172,55 @@ and a duplicate delivery can never write the sale twice.
 ---
 
 ## 4. Wiring it into your POS
+
+### Option A — the payment window (least work)
+
+One line behind your existing Card button:
+
+```html
+<script src="/pay/pos_pay.js"></script>
+<script>
+document.getElementById('cardButton').onclick = function () {
+  PosPay.open({
+    saleId: <?php echo (int) $sale['id']; ?>,
+    amount: '<?php echo number_format($sale['total'], 2); ?>',
+    token:  '<?php echo POS_API_TOKEN; ?>',   // or use pay_window_guard.php and drop this
+
+    onApproved: function (r) {
+      // The sale row is ALREADY marked paid at this point.
+      // Print the receipt / close the ticket here.
+      location.reload();
+    },
+    onDeclined: function (r) { alert(r.message); },   // sale left unpaid
+    onClosed:   function ()  { }                      // closed with no result
+  });
+};
+</script>
+```
+
+The window handles the rest on its own:
+
+```
+ Idle        Ready. "Charge card" button.   (skipped if autostart is on)
+ Sending     creating the intent, waking the reader
+ Waiting     "Present card" - polling every 1.5s, Cancel available
+ Approved    amount, brand, last 4, auth code, "Complete transaction"
+ Declined    the reason in plain words, plus "Try another card"
+```
+
+**"Complete transaction" does not take the money.** The money is taken the
+moment the card is approved — that is what the reader tells the customer. The
+button hands the result back to your POS and closes the window. If you want the
+button itself to take the money, set `capture_method => 'manual'` in
+`config.php`: then Approved means *authorised*, and Complete captures it.
+
+Protecting the window: create `pay/pay_window_guard.php` with your own staff
+session check in it (best — same login as the rest of your POS), or let your POS
+add `?token=<api_token>` when it builds the URL. `allowed_ips` applies here too.
+Closing the window mid-payment cancels the reader prompt, so a live prompt is
+never left on the counter.
+
+### Option B — wire the two calls yourself
 
 Two calls. That is the whole client side (from `demo/pos_demo.php`):
 
@@ -281,6 +334,16 @@ double-click, cancel, busy reader, timeout, manual capture, webhook (signed /
 unsigned / replayed / late), refund, auth, idempotency-key regression, and a
 deliberately broken column mapping.
 Current run: **105 checks, 0 failures.**
+
+The payment window has its own browser test - it presses Card on a till page,
+watches the popup through Idle → Waiting → Approved/Declined, presses the
+button and checks the POS window receives the result:
+
+```sh
+python3 tests/run_window_ui_test.py     # needs Playwright
+```
+
+Current run: **34 checks, 0 failures.**
 
 ### Against the real Stripe API, still no hardware
 
