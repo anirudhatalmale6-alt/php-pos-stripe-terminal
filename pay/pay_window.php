@@ -135,10 +135,55 @@ if (!is_file($guard) && isset($_GET['token'])) { $qs['token'] = $_GET['token']; 
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Card payment<?php echo $saleId !== '' ? ' - sale ' . htmlspecialchars($saleId) : ''; ?></title>
 <style>
+  /* ===========================================================================
+     LOOK AND FEEL - THIS IS THE BIT TO EDIT
+     ---------------------------------------------------------------------------
+     Every size and colour in the window comes from the values below. Change a
+     number or a colour here and the whole window follows - you never need to
+     hunt through the CSS underneath.
+
+     Sizes are in px. For a till with a big touchscreen at arm's length, try
+     --size-headline:34px, --size-detail:19px, --size-amount:40px.
+
+     Prefer not to edit this file at all? Create pay/pay_window_custom.css and
+     put your overrides in there - it is loaded last and survives any update I
+     send you. Example contents:
+
+         :root {
+           --size-headline: 34px;
+           --ok: #0a7d3f;
+           --bad: #c0132b;
+         }
+     =========================================================================== */
   :root {
-    --bg:#0f1220; --panel:#191d33; --line:#2b3157; --ink:#e9ecff; --muted:#9aa2c8;
-    --ok:#1ec98b; --bad:#ff5d6c; --wait:#f2b53c; --accent:#5b7cff;
+    /* --- text sizes ------------------------------------------------------- */
+    --size-badge:     11px;   /* the little IDLE / WAITING / APPROVED label */
+    --size-headline:  21px;   /* the big status word: Approved, Declined... */
+    --size-detail:    14px;   /* the explanation line under it              */
+    --size-amount:    26px;   /* the total at the top                       */
+    --size-button:    16px;   /* button text                                */
+    --size-cardinfo:  13.5px; /* the card details block                     */
+
+    /* --- status colours --------------------------------------------------- */
+    --ok:     #1ec98b;        /* approved  */
+    --bad:    #ff5d6c;        /* declined / cancelled */
+    --wait:   #f2b53c;        /* waiting for the card */
+    --accent: #5b7cff;        /* main buttons */
+
+    /* --- background and text ---------------------------------------------- */
+    --bg:     #0f1220;        /* window background */
+    --panel:  #191d33;        /* the status panel  */
+    --card:   #141832;        /* card details panel */
+    --line:   #2b3157;        /* borders */
+    --ink:    #e9ecff;        /* normal text */
+    --muted:  #9aa2c8;        /* secondary text */
+
+    /* --- weights, if you want them heavier/lighter ------------------------ */
+    --weight-headline: 700;
+    --weight-badge:    800;
   }
+  /* ===================== end of the bit to edit ============================ */
+
   * { box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
   html,body { height:100%; }
   body {
@@ -148,15 +193,15 @@ if (!is_file($guard) && isset($_GET['token'])) { $qs['token'] = $_GET['token']; 
   }
   header { padding:14px 18px; border-bottom:1px solid var(--line); flex:0 0 auto; }
   header .sale { font-size:12px; letter-spacing:.7px; text-transform:uppercase; color:var(--muted); }
-  header .amt { font-size:26px; font-weight:700; margin-top:2px; }
+  header .amt { font-size:var(--size-amount); font-weight:700; margin-top:2px; }
   main { flex:1 1 auto; overflow-y:auto; padding:18px; display:flex; flex-direction:column; gap:14px; }
   footer { flex:0 0 auto; padding:14px 18px 18px; border-top:1px solid var(--line); display:flex; flex-direction:column; gap:9px; }
 
   .status { background:var(--panel); border:1px solid var(--line); border-radius:12px; padding:20px 18px; text-align:center; }
   .dot { width:11px; height:11px; border-radius:50%; display:inline-block; margin-right:7px; vertical-align:middle; background:var(--muted); }
-  .badge { font-size:11px; letter-spacing:.9px; text-transform:uppercase; font-weight:800; color:var(--muted); }
-  .headline { font-size:21px; font-weight:700; margin-top:9px; }
-  .detail { color:var(--muted); font-size:14px; margin-top:7px; min-height:20px; }
+  .badge { font-size:var(--size-badge); letter-spacing:.9px; text-transform:uppercase; font-weight:var(--weight-badge); color:var(--muted); }
+  .headline { font-size:var(--size-headline); font-weight:var(--weight-headline); margin-top:9px; }
+  .detail { color:var(--muted); font-size:var(--size-detail); margin-top:7px; min-height:20px; }
 
   .s-idle .dot{ background:var(--muted); }
   .s-wait .dot{ background:var(--wait); animation:pulse 1.1s infinite; }
@@ -166,13 +211,13 @@ if (!is_file($guard) && isset($_GET['token'])) { $qs['token'] = $_GET['token']; 
   .s-ok .headline{ color:var(--ok); } .s-bad .headline{ color:var(--bad); }
   @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.25} }
 
-  .card-info { background:#141832; border:1px solid var(--line); border-radius:10px; padding:13px 15px; font-size:13.5px; }
+  .card-info { background:var(--card); border:1px solid var(--line); border-radius:10px; padding:13px 15px; font-size:var(--size-cardinfo); }
   .card-info div { display:flex; justify-content:space-between; padding:3px 0; }
   .card-info span:first-child { color:var(--muted); }
   .card-info span:last-child { font-family:ui-monospace,Menlo,Consolas,monospace; text-align:right; word-break:break-all; }
 
   button {
-    width:100%; padding:15px 16px; border:0; border-radius:10px; font-size:16px; font-weight:700;
+    width:100%; padding:15px 16px; border:0; border-radius:10px; font-size:var(--size-button); font-weight:700;
     cursor:pointer; font-family:inherit;
   }
   .primary { background:var(--accent); color:#fff; }
@@ -181,6 +226,13 @@ if (!is_file($guard) && isset($_GET['token'])) { $qs['token'] = $_GET['token']; 
   button[disabled] { opacity:.4; cursor:not-allowed; }
   .hide { display:none !important; }
 </style>
+<?php
+// Your own overrides, loaded last so they win. Create pay/pay_window_custom.css
+// and it is picked up automatically - no need to edit this file.
+if (is_file(__DIR__ . '/pay_window_custom.css')) {
+    echo '<style>' . "\n" . file_get_contents(__DIR__ . '/pay_window_custom.css') . "\n" . '</style>' . "\n";
+}
+?>
 </head>
 <body>
 

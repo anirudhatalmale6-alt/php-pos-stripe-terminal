@@ -220,6 +220,76 @@ add `?token=<api_token>` when it builds the URL. `allowed_ips` applies here too.
 Closing the window mid-payment cancels the reader prompt, so a live prompt is
 never left on the counter.
 
+### Showing a button only when the payment is approved
+
+Hide it in the markup, reveal it in `onApproved`. Nothing else reveals it:
+
+```html
+<button id="cardButton">Card</button>
+<button id="cashDone" class="hide">Cash done</button>
+```
+
+```js
+function showCashDone() {
+  document.getElementById('cashDone').classList.remove('hide');
+  document.getElementById('cardButton').classList.add('hide');
+}
+
+PosPay.open({
+  saleId: 1043, amount: '12.50',
+  onApproved: function (r) { showCashDone(); },   // the ONLY place it appears
+  onDeclined: function (r) { alert(r.message); }  // stays hidden
+});
+```
+
+**Set the starting state on the server too.** If JavaScript is the only thing
+that reveals the button, a cashier who refreshes the page — or reopens the
+ticket later — loses it on a sale that *is* paid. One line fixes that:
+
+```php
+<?php require_once '/path/to/lib/PosTerminal.php';
+      $paid = pos_sale_is_paid($saleId); ?>
+
+<button id="cardButton" class="<?php echo $paid ? 'hide' : ''; ?>">Card</button>
+<button id="cashDone"   class="<?php echo $paid ? '' : 'hide'; ?>">Cash done</button>
+```
+
+`pos_sale_is_paid()` reads the payment ledger, so it works whatever your sales
+table looks like. `pos_sale_payment($saleId)` gives you the whole result back
+(brand, last 4, auth code) if you want to reprint a receipt.
+
+A working example of all of this is in `demo/till_button.php`.
+
+### Changing the size and colour of the status messages
+
+Everything in the window comes from CSS variables in one clearly-marked block
+at the top of `pay/pay_window.php` (look for **LOOK AND FEEL**):
+
+```css
+--size-badge:     11px;   /* the little IDLE / WAITING / APPROVED label */
+--size-headline:  21px;   /* the big status word: Approved, Declined... */
+--size-detail:    14px;   /* the explanation line under it              */
+--size-amount:    26px;   /* the total at the top                       */
+--size-button:    16px;   /* button text                                */
+--ok:     #1ec98b;        /* approved             */
+--bad:    #ff5d6c;        /* declined / cancelled */
+--wait:   #f2b53c;        /* waiting for the card */
+```
+
+Better still, don't edit my file at all — create `pay/pay_window_custom.css` and
+put your overrides there. It is loaded last, so it always wins, and it survives
+any update I send you:
+
+```css
+:root {
+  --size-headline: 34px;   /* big enough to read across a counter */
+  --size-detail:   19px;
+  --size-amount:   40px;
+  --ok:   #0a7d3f;         /* darker green, better on a bright screen */
+  --bad:  #c0132b;
+}
+```
+
 ### Option B — wire the two calls yourself
 
 Two calls. That is the whole client side (from `demo/pos_demo.php`):
@@ -343,7 +413,10 @@ button and checks the POS window receives the result:
 python3 tests/run_window_ui_test.py     # needs Playwright
 ```
 
-Current run: **34 checks, 0 failures.**
+It also covers the "Cash done" button (hidden before approval, shown after,
+still shown after a page refresh on a paid sale) and the CSS override file.
+
+Current run: **46 checks, 0 failures.**
 
 ### Against the real Stripe API, still no hardware
 

@@ -9,7 +9,7 @@
  * Open:  /demo/till_button.php?sale_id=1001&amount=12.50
  */
 
-require_once dirname(__DIR__) . '/lib/Support.php';
+require_once dirname(__DIR__) . '/lib/PosTerminal.php';
 
 $saleId = isset($_GET['sale_id']) ? preg_replace('/[^A-Za-z0-9_-]/', '', $_GET['sale_id']) : '1001';
 $amount = isset($_GET['amount']) ? number_format((float) $_GET['amount'], 2, '.', '') : '12.50';
@@ -18,6 +18,11 @@ $amount = isset($_GET['amount']) ? number_format((float) $_GET['amount'], 2, '.'
 // drop the token entirely.
 $token    = pos_config('api_token');
 $currency = strtoupper(pos_config('currency', 'gbp'));
+
+// Decide the "Cash done" button's STARTING state on the server, from the
+// payment ledger - not from JavaScript. Otherwise a cashier who refreshes the
+// page, or reopens the ticket later, loses the button on a sale that is paid.
+$alreadyPaid = pos_sale_is_paid($saleId);
 ?>
 <!DOCTYPE html>
 <html lang="en">
@@ -45,6 +50,8 @@ $currency = strtoupper(pos_config('currency', 'gbp'));
          background:#141832; font-size:13.5px; white-space:pre-wrap;
          font-family:ui-monospace,Menlo,Consolas,monospace; color:var(--muted); min-height:54px; }
   .ok { color:var(--ok); } .bad { color:var(--bad); }
+  .go { background:var(--ok); color:#06281c; }
+  .hide { display:none !important; }
   .label { font-size:11px; text-transform:uppercase; letter-spacing:.7px; color:var(--muted); margin-bottom:8px; }
 </style>
 </head>
@@ -60,7 +67,11 @@ $currency = strtoupper(pos_config('currency', 'gbp'));
     <div class="row"><span>Tax</span><span>1.90</span></div>
     <div class="total"><span>Total</span><span><?php echo $amount; ?> <?php echo $currency; ?></span></div>
 
-    <button id="btnCard">Card</button>
+    <button id="btnCard" class="<?php echo $alreadyPaid ? 'hide' : ''; ?>">Card</button>
+
+    <!-- Only visible once the card is approved. Starts hidden unless the sale
+         is already paid (see $alreadyPaid above). -->
+    <button id="btnCashDone" class="go <?php echo $alreadyPaid ? '' : 'hide'; ?>">Cash done</button>
 
     <div class="label" style="margin-top:18px">What the POS receives back</div>
     <div class="out" id="out">Nothing yet - press Card.</div>
@@ -69,7 +80,20 @@ $currency = strtoupper(pos_config('currency', 'gbp'));
 
 <script src="../pay/pos_pay.js"></script>
 <script>
-var out = document.getElementById('out');
+var out        = document.getElementById('out');
+var btnCard    = document.getElementById('btnCard');
+var btnCashDone = document.getElementById('btnCashDone');
+
+// This is the whole "show it only when approved" trick: hide it in the markup,
+// reveal it in onApproved. Nothing else reveals it.
+function showCashDone() { btnCashDone.classList.remove('hide'); btnCard.classList.add('hide'); }
+
+btnCashDone.onclick = function () {
+  // Your existing finish-the-sale code goes here: print the receipt, close the
+  // ticket, clear the screen for the next customer.
+  out.className = 'out ok';
+  out.textContent = 'Cash done pressed - your POS would close the ticket here.';
+};
 
 document.getElementById('btnCard').onclick = function () {
   out.className = 'out';
@@ -84,6 +108,7 @@ document.getElementById('btnCard').onclick = function () {
 
     onApproved: function (r) {
       // The sale row is already paid in the database by this point.
+      showCashDone();               // <-- the button appears only now
       out.className = 'out ok';
       out.textContent =
         'APPROVED\n' +
@@ -92,7 +117,7 @@ document.getElementById('btnCard').onclick = function () {
         'auth      ' + (r.auth_code || '-') + '\n' +
         'charge    ' + (r.charge_id || '') + '\n' +
         'intent    ' + (r.payment_intent_id || '') + '\n\n' +
-        '-> print the receipt / close the ticket here';
+        '-> Cash done button is now showing';
     },
 
     onDeclined: function (r) {

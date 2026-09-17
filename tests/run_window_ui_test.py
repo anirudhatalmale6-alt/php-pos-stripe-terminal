@@ -104,6 +104,7 @@ def run_case(label, sale_id, amount, outcome, decline_code="card_declined"):
               "Present card" in win.inner_text("#headline"), win.inner_text("#headline"))
         check(label + ": shows the amount", amount in win.inner_text("#amt"), win.inner_text("#amt"))
         check(label + ": offers Cancel while waiting", win.is_visible("#btnCancel"))
+        check(label + ": Cash done is HIDDEN before approval", not till.is_visible("#btnCashDone"))
 
         # Let the reader answer.
         mock(outcome=outcome, polls="1", decline_code=decline_code)
@@ -134,6 +135,12 @@ def run_case(label, sale_id, amount, outcome, decline_code="card_declined"):
             check(label + ": POS received APPROVED", "APPROVED" in out, out[:160])
             check(label + ": POS received the charge id", "ch_" in out, out[:160])
             check(label + ": POS received brand and last 4", "****4242" in out, out[:160])
+            check(label + ": Cash done appears once approved", till.is_visible("#btnCashDone"))
+            check(label + ": Card button hidden once paid", not till.is_visible("#btnCard"))
+            till.click("#btnCashDone")
+            till.wait_for_timeout(200)
+            check(label + ": Cash done runs the POS finish step",
+                  "Cash done pressed" in till.inner_text("#out"), till.inner_text("#out")[:120])
             row = sale_row(sale_id)
             if row:
                 check(label + ": sale row marked paid", row["payment_status"] == "paid", row)
@@ -142,6 +149,7 @@ def run_case(label, sale_id, amount, outcome, decline_code="card_declined"):
         else:
             check(label + ": POS received the decline", ("FAILED" in out or "DECLINED" in out), out[:160])
             check(label + ": POS was NOT given a charge id", "ch_" not in out, out[:160])
+            check(label + ": Cash done stays hidden after a decline", not till.is_visible("#btnCashDone"))
             row = sale_row(sale_id)
             if row:
                 check(label + ": sale left unpaid", row["amount_paid"] is None, row)
@@ -185,10 +193,67 @@ def run_idle_check():
         browser.close()
 
 
+def run_refresh_after_paid_check():
+    """A paid sale must still show Cash done after a page refresh."""
+    print("\n[refresh] reopening a paid sale keeps the button")
+    if not DB:
+        print("  SKIPPED (no TEST_DB)")
+        return
+    with sync_playwright() as p:
+        browser = p.chromium.launch()
+        page = browser.new_page()
+        page.set_viewport_size({"width": 900, "height": 650})
+        # 7001 was paid by the approve case above.
+        page.goto("%s/demo/till_button.php?sale_id=7001&amount=12.50" % APP)
+        page.wait_for_timeout(400)
+        check("refresh: Cash done visible on a paid sale", page.is_visible("#btnCashDone"))
+        check("refresh: Card button hidden on a paid sale", not page.is_visible("#btnCard"))
+        # And an unpaid sale must NOT show it.
+        seed(7009, 4.00)
+        page.goto("%s/demo/till_button.php?sale_id=7009&amount=4.00" % APP)
+        page.wait_for_timeout(400)
+        check("refresh: Cash done hidden on an unpaid sale", not page.is_visible("#btnCashDone"))
+        check("refresh: Card button shown on an unpaid sale", page.is_visible("#btnCard"))
+        browser.close()
+
+
+def run_style_override_check():
+    """pay/pay_window_custom.css must win over the built-in sizes/colours."""
+    print("\n[style] pay_window_custom.css overrides the look")
+    css_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                            "pay", "pay_window_custom.css")
+    existed = os.path.exists(css_path)
+    if existed:
+        print("  SKIPPED (you already have a pay_window_custom.css - not touching it)")
+        return
+    with open(css_path, "w") as fh:
+        fh.write(":root { --size-headline: 40px; --ok: rgb(1, 2, 3); }\n")
+    try:
+        seed(7008, 6.00)
+        post(MOCK + "/__mock/reset")
+        mock(outcome="approve", polls="1")
+        with sync_playwright() as p:
+            browser = p.chromium.launch()
+            page = browser.new_page()
+            page.set_viewport_size({"width": 420, "height": 640})
+            page.goto("%s/pay/pay_window.php?sale_id=7008&amount=6.00&autostart=1&token=%s" % (APP, TOKEN))
+            page.wait_for_selector(".s-ok", timeout=20000)
+            page.wait_for_timeout(300)
+            size = page.eval_on_selector("#headline", "e => getComputedStyle(e).fontSize")
+            colour = page.eval_on_selector("#headline", "e => getComputedStyle(e).color")
+            check("style: headline size follows the override", size == "40px", size)
+            check("style: approved colour follows the override", colour == "rgb(1, 2, 3)", colour)
+            browser.close()
+    finally:
+        os.remove(css_path)
+
+
 run_access_checks()
 run_idle_check()
 run_case("approve", 7001, "12.50", "approve")
 run_case("decline", 7002, "40.00", "decline", "insufficient_funds")
+run_refresh_after_paid_check()
+run_style_override_check()
 
 print("\n=== WINDOW UI: %d failed ===" % len(failures))
 for f in failures:

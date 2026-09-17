@@ -119,6 +119,45 @@ function pos_resolve_amount($saleId, $requestedAmount = null, $currency = null)
     return $amount;
 }
 
+/**
+ * Has this sale been paid by card? Use it server-side when you render the sale
+ * screen, to decide whether a button like "Cash done" starts out visible.
+ *
+ * Why this matters: if you only reveal the button from JavaScript when the
+ * payment is approved, then a cashier who refreshes the page - or reopens the
+ * ticket - loses the button on a sale that IS paid. Deciding the initial state
+ * here fixes that, because it reads the payment ledger rather than relying on
+ * what the browser happens to remember.
+ *
+ * It reads this integration's own table, so it works whatever your sales table
+ * looks like.
+ *
+ * @return bool
+ */
+function pos_sale_is_paid($saleId)
+{
+    try {
+        $st = pos_db()->prepare(
+            "SELECT 1 FROM pos_card_payments WHERE sale_id = ? AND status = 'succeeded' LIMIT 1"
+        );
+        $st->execute(array((string) $saleId));
+        return (bool) $st->fetchColumn();
+    } catch (Exception $e) {
+        pos_log('error', 'pos_sale_is_paid failed: ' . $e->getMessage());
+        return false;
+    }
+}
+
+/**
+ * The full card payment result for a sale, or null if there has never been one.
+ * Handy for reprinting a receipt: brand, last 4 and the auth code are all here.
+ */
+function pos_sale_payment($saleId)
+{
+    $row = pos_payment_find_by_sale($saleId);
+    return $row ? pos_public_status($row) : null;
+}
+
 // -----------------------------------------------------------------------------
 // 1. START
 // -----------------------------------------------------------------------------
